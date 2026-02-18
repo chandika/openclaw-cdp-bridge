@@ -1,6 +1,6 @@
 ---
 name: cdp-bridge
-description: Reliable browser typing for OpenClaw via CDP. Handles hostile editors (DraftJS, TipTap, ProseMirror) that reject Playwright input. Complements the built-in browser tool — use browser for reading, cdp-bridge for writing.
+description: Full CDP browser automation for OpenClaw. Handles hostile editors, Shadow DOM, AI element finding, and everything Playwright struggles with. Built on browser-use + cdp-use.
 version: 1.0.0
 homepage: https://github.com/chandika/openclaw-cdp-bridge
 metadata: {"clawdbot":{"emoji":"🔌"}}
@@ -8,142 +8,180 @@ metadata: {"clawdbot":{"emoji":"🔌"}}
 
 # CDP Bridge for OpenClaw
 
-Use the built-in browser tool for reading pages. Use this bridge for typing into hostile editors.
+Two-layer browser control: **built-in browser tool for reading, CDP bridge for everything else.**
 
-## When to Use This
+## Routing Rules
 
-**Use the built-in browser tool for:**
-- Navigation, clicking, scrolling
-- Snapshots, screenshots, PDFs
+### Use built-in browser tool when:
+- Navigating to URLs
+- Taking screenshots and snapshots
+- Clicking simple buttons and links
 - Reading page content
-- Simple form inputs (`<input>`, `<textarea>`)
-- Clicking buttons (Reply, Submit, etc.)
+- Filling simple `<input>` and `<textarea>` fields
 
-**Use CDP Bridge for:**
-- Typing into rich text editors (DraftJS, TipTap, ProseMirror, Slate)
-- Any contenteditable div that rejects Playwright's `type()` or `fill()`
-- Multi-line text entry in editors that check `event.isTrusted`
-- Sites known to need it: **X/Twitter**, **Grok**, **Notion**, **Slack web**, **LinkedIn post editor**
+### Use CDP bridge when:
+- Typing into **rich text editors** (DraftJS, TipTap, ProseMirror, Slate, Quill)
+- Interacting with **Shadow DOM** elements
+- Need **accessibility tree** for element discovery
+- Complex **cross-origin iframe** interactions
+- **AI-powered element finding** ("find the submit button" instead of CSS selectors)
+- Any interaction where built-in browser tool produces garbled/empty results
 
-## How It Works
-
-The bridge runs on the host machine (where Chrome is) and dispatches raw CDP `Input.dispatchKeyEvent` events. These events have `isTrusted: true` — indistinguishable from real keyboard input.
-
-## Detection: When to Route to CDP Bridge
-
-Before typing into any contenteditable element, check if the built-in browser tool can handle it:
-
-1. Try `type` with `slowly: true` on the target ref
-2. Read back the element's `textContent` via `evaluate`
-3. If the text doesn't match (garbled, duplicated, empty, reversed) → route to CDP Bridge
-
-**Known hostile editors (always use CDP Bridge):**
-- `data-testid="tweetTextarea_0"` (X/Twitter DraftJS)
-- `.ProseMirror` (ProseMirror-based editors)
-- `.tiptap` (TipTap editors)
-- `[data-slate-editor]` (Slate editors)
-- `.DraftEditor-content` (any DraftJS editor)
-- `.ql-editor` (Quill editors)
+### Known hostile editors (ALWAYS use CDP bridge):
+- `[data-testid="tweetTextarea_0"]` — X/Twitter (DraftJS)
+- `.DraftEditor-content` — any DraftJS editor
+- `.ProseMirror` — ProseMirror-based editors
+- `.tiptap` — TipTap editors
+- `[data-slate-editor]` — Slate editors
+- `.ql-editor` — Quill editors
+- `[contenteditable="true"]` inside Shadow DOM
 
 ## Prerequisites
 
-The CDP Bridge must be running on the host machine. Check with:
+CDP bridge runs on the **host machine** (where Chrome is). Check availability:
 
+```
+# Via nodes.run on Mac
+nodes.run: curl -s http://127.0.0.1:18850/health
+
+# If not running, tell user:
+"CDP bridge isn't running. Start it with:
+  python3 ~/.openclaw/cdp-bridge/bridge.py serve
+
+Or install first:
+  bash <(curl -sSL https://raw.githubusercontent.com/chandika/openclaw-cdp-bridge/main/install.sh)"
+```
+
+## API Reference
+
+All commands via `nodes.run` on the host node, or HTTP if bridge server is running.
+
+### Core CDP Operations
+
+#### Type text (raw CDP keyboard events)
 ```bash
-# Via nodes.run
-nodes.run on "Mac Browser Node": curl -s http://127.0.0.1:18850/health
-
-# Or check if bridge.py is available
-nodes.run on "Mac Browser Node": python3 /path/to/bridge.py tabs
+# CLI
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py type \
+  --text "Your multi-line\ntext here" \
+  --tab-url "x.com" \
+  --selector '[data-testid="tweetTextarea_0"]' \
+  --clear
+```
+```json
+// HTTP POST /type
+{"text": "Your text", "tabUrl": "x.com", "selector": "[data-testid='tweetTextarea_0']", "clear": true}
 ```
 
-If not running, tell the user:
-```
-CDP Bridge isn't running on your Mac. Start it with:
-  cd openclaw-cdp-bridge && python3 bridge.py serve
-Or for one-off typing:
-  python3 bridge.py type --text "your text" --tab-url "x.com"
-```
-
-## API
-
-### Via nodes.run (CLI mode)
-
+#### Click at coordinates
 ```bash
-# Type text into the focused element of a tab matching "x.com"
-nodes.run: python3 bridge.py type --text "Hello world" --tab-url "x.com"
-
-# Type with newlines
-nodes.run: python3 bridge.py type --text "Line 1\nLine 2" --tab-url "x.com"
-
-# Clear existing text first, then type
-nodes.run: python3 bridge.py type --text "New text" --tab-url "x.com" --clear
-
-# Focus a specific element before typing
-nodes.run: python3 bridge.py type --text "tweet text" --tab-url "x.com" --selector '[data-testid="tweetTextarea_0"]'
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py click --x 500 --y 300 --tab-url "x.com"
+```
+```json
+// HTTP POST /click
+{"x": 500, "y": 300, "tabUrl": "x.com"}
 ```
 
-### Via HTTP (server mode)
-
-If the bridge is running as a server (`python3 bridge.py serve --port 18850`):
-
+#### Evaluate JavaScript
 ```bash
-# Type text
-curl -X POST http://127.0.0.1:18850/type \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "tabUrl": "x.com"}'
-
-# Clear and type
-curl -X POST http://127.0.0.1:18850/type \
-  -H "Content-Type: application/json" \
-  -d '{"text": "New text", "tabUrl": "x.com", "clear": true, "selector": "[data-testid=\"tweetTextarea_0\"]"}'
-
-# List tabs
-curl http://127.0.0.1:18850/tabs
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py eval \
+  --expr "document.querySelector('[data-testid=\"tweetTextarea_0\"]').innerText" \
+  --tab-url "x.com"
+```
+```json
+// HTTP POST /eval
+{"expression": "document.title", "tabUrl": "x.com"}
 ```
 
-## Workflow: Posting a Tweet
+#### Get DOM tree (pierces Shadow DOM)
+```bash
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py dom --tab-url "x.com"
+```
 
-Here's the complete flow combining browser tool + CDP bridge:
+#### Get accessibility tree
+```bash
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py axtree --tab-url "x.com"
+```
 
-1. **Navigate** (browser tool): `browser navigate to https://x.com/chandika/status/XXX`
-2. **Click reply box** (browser tool): `browser act click ref=e40` (the reply textbox)
-3. **Wait for focus** (browser tool): snapshot to confirm textarea is active
-4. **Type text** (CDP bridge): `nodes.run: python3 bridge.py type --text "tweet content" --tab-url "x.com" --selector '[data-testid="tweetTextarea_0"]'`
-5. **Verify** (browser tool): `browser evaluate` to read back textContent
-6. **Click Reply** (browser tool): `browser act click` on the Reply button
+#### List tabs
+```bash
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py tabs
+```
 
-Steps 1-3 and 5-6 use OpenClaw's built-in browser. Only step 4 uses CDP bridge.
+### AI-Powered Operations (requires browser-use)
 
-## Workflow: Posting on LinkedIn
+#### Run agent task
+```bash
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py agent \
+  --task "Reply to the top tweet saying 'Great insight!'" \
+  --tab-url "x.com"
+```
+```json
+// HTTP POST /agent
+{"task": "Fill in the contact form with name John Doe", "tabUrl": "example.com"}
+```
 
-1. **Navigate** (browser tool): `browser navigate to https://linkedin.com/in/chandika`
-2. **Click "Start a post"** (browser tool)
-3. **Type** (CDP bridge): `nodes.run: python3 bridge.py type --text "post content" --tab-url "linkedin.com" --selector '.ql-editor'`
-4. **Click Post** (browser tool)
+#### AI element finding
+```bash
+nodes.run: python3 ~/.openclaw/cdp-bridge/bridge.py find \
+  --prompt "the reply textbox" \
+  --tab-url "x.com"
+```
+```json
+// HTTP POST /find
+{"prompt": "the submit button", "tabUrl": "example.com"}
+```
 
-## Environment Variables
+## Common Workflows
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CDP_URL` | `http://localhost:18800` | Chrome CDP endpoint URL |
-| `CDP_PORT` | `18800` | Chrome CDP port (ignored if CDP_URL is set) |
+### Post a tweet on X
+```
+1. browser navigate → https://x.com/chandika/status/XXX
+2. browser act click → reply textbox ref
+3. nodes.run → bridge.py type --text "tweet text" --tab-url x.com --selector '[data-testid="tweetTextarea_0"]'
+4. browser evaluate → verify textContent matches
+5. browser act click → Reply button
+```
 
-## Troubleshooting
+### Post on LinkedIn
+```
+1. browser navigate → https://linkedin.com/in/chandika
+2. browser act click → "Start a post" button
+3. nodes.run → bridge.py type --text "post text" --tab-url linkedin.com --selector '.ql-editor'
+4. browser act click → Post button
+```
 
-**"No tab found matching..."**
-- Chrome must be running with the target page open
-- Use `python3 bridge.py tabs` to see available tabs
+### Interact with Shadow DOM
+```
+1. browser navigate → target URL
+2. nodes.run → bridge.py dom --tab-url "target.com"  (gets full DOM with Shadow DOM pierced)
+3. nodes.run → bridge.py eval --expr "document.querySelector('my-component').shadowRoot.querySelector('input').value"
+4. nodes.run → bridge.py type --text "value" --selector "my-component" --tab-url "target.com"
+```
 
-**"Connection refused"**
-- Chrome's CDP port must be accessible. OpenClaw's managed browser exposes port 18800 by default.
-- Check: `curl -s http://localhost:18800/json`
+### AI-powered form filling
+```
+1. browser navigate → form URL
+2. nodes.run → bridge.py agent --task "Fill in the form with: Name=John, Email=john@example.com, Submit"
+```
 
-**Text appears garbled**
-- Increase delay: edit `bridge.py` and change `asyncio.sleep(0.008)` to `0.02`
-- Some editors need more time between keystrokes
+## Auto-Detection Logic
 
-**Bridge not reachable from OpenClaw**
-- The bridge runs on the host, not in Docker
-- Use `nodes.run` to execute commands on the host
-- Or run bridge in server mode and ensure port 18850 is accessible
+Before routing to CDP bridge, the agent should check if built-in browser can handle it:
+
+1. Try `browser act type` with `slowly: true` on the target
+2. Use `browser act evaluate` to read back the element's `textContent`
+3. **If text matches** → built-in browser works, keep using it
+4. **If text is garbled, empty, duplicated, or reversed** → route to CDP bridge
+5. **If element matches known hostile selectors** → skip check, route directly to CDP bridge
+
+## Fallback Chain
+
+```
+1. Built-in browser tool (Playwright) — try first
+   ↓ fails?
+2. CDP bridge type (raw keyboard) — try second
+   ↓ fails?
+3. CDP bridge agent (browser-use AI) — try third
+   ↓ fails?
+4. Tell user to use clipboard/manual paste
+```

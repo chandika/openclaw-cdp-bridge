@@ -1,83 +1,139 @@
 # 🔌 OpenClaw CDP Bridge
 
-Reliable browser automation for OpenClaw — including typing into hostile editors (DraftJS, TipTap, ProseMirror, Slate) that reject standard Playwright input.
+Full CDP browser automation for OpenClaw — powered by [browser-use](https://github.com/browser-use/browser-use) and [cdp-use](https://github.com/browser-use/cdp-use).
 
-## The Problem
+Connects to OpenClaw's managed Chrome instance and provides reliable browser interaction that goes beyond Playwright — Shadow DOM, hostile editors (DraftJS/TipTap/Slate), AI-powered element finding, and raw CDP access.
 
-OpenClaw's built-in browser tool uses Playwright, which works great for:
-- ✅ Navigation, clicking, reading pages
-- ✅ Screenshots, snapshots, PDFs
-- ✅ Simple form inputs
+## Why
 
-But fails on:
-- ❌ Rich text editors (DraftJS on X/Twitter, TipTap on Grok, Slate, ProseMirror)
-- ❌ Multi-line typing in contenteditable divs
-- ❌ Any editor that checks `event.isTrusted`
+OpenClaw's built-in browser tool uses Playwright via a relay. It's great for reading pages, clicking, and navigating. But it struggles with:
 
-These editors only accept events from the browser's native input pipeline — not Playwright's synthetic events.
+- **Hostile editors** (DraftJS on X, TipTap, ProseMirror, Slate) — `event.isTrusted` checks reject Playwright input
+- **Shadow DOM** — deeply nested shadow roots are hard to pierce with selectors
+- **Complex interactions** — drag-and-drop across iframes, multi-step form wizards
+- **Dynamic SPAs** — React/Vue apps that constantly re-render DOM
 
-## The Solution
-
-This package provides a **CDP (Chrome DevTools Protocol) bridge** that:
-1. Runs a lightweight helper on the host machine (where Chrome is)
-2. Connects directly to Chrome's CDP websocket
-3. Uses `Input.dispatchKeyEvent` for raw keyboard events (`isTrusted: true`)
-4. Exposes a simple API the OpenClaw agent can call via `nodes.run` or HTTP
+browser-use solves all of this. It's the #1 open-source browser agent framework (78K+ GitHub stars), built on pure CDP. This package bridges it to OpenClaw.
 
 ## Architecture
 
 ```
-┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────┐
-│  OpenClaw Agent      │     │  CDP Bridge (host)    │     │  Chrome      │
-│  (Docker/sandbox)    │────▶│  Python script         │────▶│  (host Mac)  │
-│                      │     │  via nodes.run or HTTP │     │  CDP :18800  │
-│  browser tool: read  │     │                        │     │              │
-│  cdp-bridge: write   │     │  Input.dispatchKeyEvent│     │  DraftJS ✅  │
-└─────────────────────┘     └──────────────────────┘     └─────────────┘
+┌───────────────────────┐
+│  OpenClaw Agent        │
+│  (Docker container)    │
+│                        │
+│  browser tool → read   │─── Playwright relay ──┐
+│  cdp-bridge  → write   │─── nodes.run / HTTP ──┤
+└───────────────────────┘                        │
+                                                  ▼
+┌───────────────────────┐     ┌─────────────────┐
+│  CDP Bridge (host)     │────▶│  Chrome (host)   │
+│  browser-use + cdp-use │     │  CDP :18800      │
+│                        │     │                  │
+│  • AI element finding  │     │  Shadow DOM ✅   │
+│  • Raw CDP keyboard    │     │  DraftJS ✅      │
+│  • Shadow DOM piercing │     │  iFrames ✅      │
+│  • Form automation     │     │  SPAs ✅         │
+└───────────────────────┘     └─────────────────┘
 ```
 
-**OpenClaw's browser tool** handles reading (snapshots, screenshots, navigation, clicking).
-**CDP Bridge** handles writing (typing into any editor, including hostile ones).
-
-## Install
-
-### Host-side (where Chrome runs)
+## Install (host machine)
 
 ```bash
-pip3 install cdp-use httpx
-# Or: uv pip install cdp-use httpx
-```
+# One-line install
+bash <(curl -sSL https://raw.githubusercontent.com/chandika/openclaw-cdp-bridge/main/install.sh)
 
-Clone or install the bridge:
-```bash
+# Or manual
+pip3 install browser-use cdp-use httpx websockets
 git clone https://github.com/chandika/openclaw-cdp-bridge
-cd openclaw-cdp-bridge
 ```
 
-### OpenClaw-side
+## Quick Start
+
+### CLI — Type into X/Twitter
+
+```bash
+# Connect to OpenClaw's Chrome and type a tweet
+python3 bridge.py type --text "Hello from CDP bridge" --tab-url "x.com" \
+  --selector '[data-testid="tweetTextarea_0"]'
+```
+
+### CLI — Run a browser-use agent task
+
+```bash
+# AI-powered: describe what you want in natural language
+python3 bridge.py agent --task "Reply to the top tweet with 'Great post!'" --tab-url "x.com"
+```
+
+### HTTP Server — For OpenClaw agent access
+
+```bash
+# Start server
+python3 bridge.py serve --port 18850
+
+# Agent calls via nodes.run or HTTP:
+# POST /type   — raw CDP typing
+# POST /agent  — AI-powered browser task
+# POST /click  — CDP click at coordinates or selector
+# POST /eval   — evaluate JavaScript
+# GET  /tabs   — list browser tabs
+# GET  /state  — get page DOM/accessibility tree
+```
+
+### Python — Connect to existing Chrome
+
+```python
+from browser_use import Browser
+
+# Connect to OpenClaw's managed Chrome
+browser = Browser(cdp_url="http://localhost:18800")
+await browser.start()
+
+# AI-powered element finding
+page = await browser.get_current_page()
+reply_box = await page.must_get_element_by_prompt("tweet reply textbox", llm=llm)
+await reply_box.fill("Hello world")  # Uses CDP, not Playwright
+```
+
+## OpenClaw Skill
+
+Install the skill so the agent knows when to use CDP bridge:
 
 ```bash
 clawhub install chandika/cdp-bridge
 ```
 
-Or copy `SKILL.md` to your OpenClaw skills directory.
+The skill teaches the agent:
+1. **When to use built-in browser** — reading, navigating, clicking buttons, screenshots
+2. **When to use CDP bridge** — typing into editors, Shadow DOM, complex interactions
+3. **How to call the bridge** — via `nodes.run` or HTTP API
+4. **Auto-detection** — recognizes hostile editors by CSS selectors and routes accordingly
 
-## Usage
+## What browser-use Gives Us
 
-The agent calls the bridge when it needs to type into a hostile editor:
+| Capability | Playwright (built-in) | CDP Bridge (browser-use) |
+|---|---|---|
+| Navigate / click | ✅ | ✅ |
+| Read page / snapshot | ✅ | ✅ |
+| Type into `<input>` | ✅ | ✅ |
+| Type into DraftJS | ❌ | ✅ (`Input.dispatchKeyEvent`) |
+| Type into TipTap/Slate | ❌ | ✅ |
+| Shadow DOM | 🟡 (limited) | ✅ (full CDP DOM.getDocument with pierce) |
+| AI element finding | ❌ | ✅ (`get_element_by_prompt`) |
+| Cross-origin iframes | 🟡 | ✅ |
+| Accessibility tree | 🟡 | ✅ (full AX tree via CDP) |
+| Form automation | 🟡 | ✅ (multi-step, adaptive) |
+| Event.isTrusted | ❌ (synthetic) | ✅ (native CDP events) |
 
-```
-Agent: "I need to type a tweet on X"
-→ Uses browser tool to navigate to X, click reply box
-→ Uses cdp-bridge to type the text via raw CDP events
-→ Uses browser tool to click Reply button
-```
+## Environment Variables
 
-## Components
-
-- `bridge.py` — Host-side CDP bridge server/CLI
-- `SKILL.md` — OpenClaw skill with routing logic
-- `install.sh` — One-line host setup
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CDP_URL` | `http://localhost:18800` | Chrome CDP endpoint |
+| `CDP_PORT` | `18800` | Chrome CDP port |
+| `BROWSER_USE_API_KEY` | — | Optional: browser-use cloud API key |
+| `OPENAI_API_KEY` | — | For AI element finding (optional) |
+| `ANTHROPIC_API_KEY` | — | For AI element finding (optional) |
 
 ## License
 
