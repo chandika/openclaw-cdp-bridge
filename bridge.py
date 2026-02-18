@@ -121,11 +121,22 @@ async def dispatch_key(ws, char: str, session_id: str = None):
         elif char.isdigit():
             code = f'Digit{char}'
 
-        for etype in ['keyDown', 'char', 'keyUp']:
-            params = {'type': etype, 'key': char, 'code': code, 'text': char,
-                      'windowsVirtualKeyCode': kc, 'nativeVirtualKeyCode': kc,
-                      'modifiers': mods}
-            await cdp_send(ws, 'Input.dispatchKeyEvent', params, session_id)
+        # keyDown without text (signals which key), char with text (inserts character), keyUp
+        await cdp_send(ws, 'Input.dispatchKeyEvent', {
+            'type': 'keyDown', 'key': char, 'code': code,
+            'windowsVirtualKeyCode': kc, 'nativeVirtualKeyCode': kc,
+            'modifiers': mods,
+        }, session_id)
+        await cdp_send(ws, 'Input.dispatchKeyEvent', {
+            'type': 'char', 'key': char, 'text': char,
+            'windowsVirtualKeyCode': kc, 'nativeVirtualKeyCode': kc,
+            'modifiers': mods,
+        }, session_id)
+        await cdp_send(ws, 'Input.dispatchKeyEvent', {
+            'type': 'keyUp', 'key': char, 'code': code,
+            'windowsVirtualKeyCode': kc, 'nativeVirtualKeyCode': kc,
+            'modifiers': mods,
+        }, session_id)
         await asyncio.sleep(0.008)
 
 
